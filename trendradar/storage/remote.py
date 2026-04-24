@@ -62,6 +62,7 @@ class RemoteStorageBackend(SQLiteStorageMixin, StorageBackend):
         enable_html: bool = True,
         temp_dir: Optional[str] = None,
         timezone: str = DEFAULT_TIMEZONE,
+        dedup_config: Optional[dict] = None,
     ):
         """
         初始化远程存储后端
@@ -86,6 +87,7 @@ class RemoteStorageBackend(SQLiteStorageMixin, StorageBackend):
         self.enable_txt = enable_txt
         self.enable_html = enable_html
         self.timezone = timezone
+        self.dedup_config = dedup_config or {}
 
         # 创建临时目录
         self.temp_dir = Path(temp_dir) if temp_dir else Path(tempfile.mkdtemp(prefix="trendradar_"))

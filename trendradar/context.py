@@ -204,6 +204,7 @@ class AppContext:
                 pull_enabled=pull_config.get("ENABLED", False),
                 pull_days=pull_config.get("DAYS", 7),
                 timezone=self.timezone,
+                dedup_config=self.config.get("DEDUP", {}),
             )
         return self._storage_manager
 

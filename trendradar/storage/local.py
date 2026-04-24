@@ -39,6 +39,7 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
         enable_txt: bool = True,
         enable_html: bool = True,
         timezone: str = DEFAULT_TIMEZONE,
+        dedup_config: Optional[dict] = None,
     ):
         """
         初始化本地存储后端
@@ -53,6 +54,7 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
         self.enable_txt = enable_txt
         self.enable_html = enable_html
         self.timezone = timezone
+        self.dedup_config = dedup_config or {}
         self._db_connections: Dict[str, sqlite3.Connection] = {}
 
     @property

@@ -84,12 +84,23 @@ def _load_report_config(config_data: Dict) -> Dict:
     sort_by_position_env = _get_env_bool("SORT_BY_POSITION_FIRST")
     max_news_env = _get_env_int("MAX_NEWS_PER_KEYWORD")
 
+    dedup_config = report_config.get("dedup", {})
+    dedup_apply_to = dedup_config.get("apply_to", {})
+
     return {
         "REPORT_MODE": report_config.get("mode", "daily"),
         "DISPLAY_MODE": report_config.get("display_mode", "keyword"),
         "RANK_THRESHOLD": report_config.get("rank_threshold", 10),
         "SORT_BY_POSITION_FIRST": sort_by_position_env if sort_by_position_env is not None else report_config.get("sort_by_position_first", False),
         "MAX_NEWS_PER_KEYWORD": max_news_env or report_config.get("max_news_per_keyword", 0),
+        "DEDUP": {
+            "ENABLED": dedup_config.get("enabled", True),
+            "LOOKBACK_HOURS": int(dedup_config.get("lookback_hours", 48) or 48),
+            "APPLY_TO": {
+                "HOTLIST": dedup_apply_to.get("hotlist", True),
+                "RSS": dedup_apply_to.get("rss", True),
+            },
+        },
     }
 
 

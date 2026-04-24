@@ -7,7 +7,7 @@ SQLite 存储 Mixin
 
 import sqlite3
 from abc import abstractmethod
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -1013,6 +1013,65 @@ class SQLiteStorageMixin:
             print(f"[存储] 读取 RSS 数据失败: {e}")
             return None
 
+    def _collect_recent_rss_urls_impl(
+        self,
+        current_feed_ids: Optional[List[str]],
+        latest_date: str,
+        latest_time: str,
+        lookback_hours: int = 48,
+    ) -> Dict[str, set]:
+        """收集最近 lookback_hours 小时内已出现过的 RSS URL。"""
+        try:
+            latest_dt = datetime.strptime(f"{latest_date} {latest_time}", "%Y-%m-%d %H:%M")
+        except ValueError:
+            return {}
+
+        rss_dir = Path(self.data_dir) / "rss"
+        if not rss_dir.exists():
+            return {}
+
+        window_start = latest_dt - timedelta(hours=lookback_hours)
+        feed_filter = set(current_feed_ids) if current_feed_ids is not None else None
+        recent_urls: Dict[str, set] = {}
+
+        for db_path in sorted(rss_dir.glob('*.db')):
+            try:
+                db_date = datetime.strptime(db_path.stem, "%Y-%m-%d")
+            except ValueError:
+                continue
+
+            if db_date.date() < window_start.date() or db_date.date() > latest_dt.date():
+                continue
+
+            conn = sqlite3.connect(db_path)
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT feed_id, url, first_crawl_time
+                    FROM rss_items
+                    WHERE url != ''
+                """)
+                for feed_id, url, first_crawl_time in cursor.fetchall():
+                    if feed_filter is not None and feed_id not in feed_filter:
+                        continue
+                    if not first_crawl_time:
+                        continue
+
+                    try:
+                        item_dt = datetime.strptime(f"{db_path.stem} {first_crawl_time}", "%Y-%m-%d %H:%M")
+                    except ValueError:
+                        continue
+
+                    if not (window_start <= item_dt < latest_dt):
+                        continue
+
+                    recent_urls.setdefault(feed_id, set()).add(url)
+            finally:
+                conn.close()
+
+        return recent_urls
+
+
     def _detect_new_rss_items_impl(self, current_data: RSSData) -> Dict[str, List[RSSItem]]:
         """
         检测新增的 RSS 条目（增量模式）
@@ -1063,6 +1122,29 @@ class SQLiteStorageMixin:
                         if feed_id not in new_items:
                             new_items[feed_id] = []
                         new_items[feed_id].append(item)
+
+            # 对 RSS 做跨天 URL 去重，避免相同文章隔天重复推送
+            dedup_config = getattr(self, "dedup_config", {}) or {}
+            dedup_enabled = dedup_config.get("ENABLED", True)
+            rss_dedup_enabled = dedup_config.get("APPLY_TO", {}).get("RSS", True)
+            lookback_hours = int(dedup_config.get("LOOKBACK_HOURS", 48) or 48)
+
+            recent_urls = {}
+            if dedup_enabled and rss_dedup_enabled and lookback_hours > 0:
+                recent_urls = self._collect_recent_rss_urls_impl(
+                    list(current_data.items.keys()),
+                    current_data.date,
+                    current_time,
+                    lookback_hours=lookback_hours,
+                )
+            if recent_urls:
+                filtered_new_items: Dict[str, List[RSSItem]] = {}
+                for feed_id, rss_list in new_items.items():
+                    known_urls = recent_urls.get(feed_id, set())
+                    filtered_list = [item for item in rss_list if item.url and item.url not in known_urls]
+                    if filtered_list:
+                        filtered_new_items[feed_id] = filtered_list
+                new_items = filtered_new_items
 
             return new_items
 

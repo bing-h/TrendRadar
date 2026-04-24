@@ -9,7 +9,12 @@
 Author: TrendRadar Team
 """
 
-from typing import Dict, List, Tuple, Optional
+from datetime import datetime, timedelta
+from pathlib import Path
+import sqlite3
+from typing import Dict, List, Tuple, Optional, Set
+
+from trendradar.utils.url import normalize_url
 
 
 def read_all_today_titles_from_storage(
@@ -110,6 +115,92 @@ def read_all_today_titles(
     return all_results, final_id_to_name, title_info
 
 
+def _parse_news_datetime(date_str: str, time_str: str) -> Optional[datetime]:
+    """解析新闻库里的日期和抓取时间。"""
+    if not date_str or not time_str:
+        return None
+
+    time_candidates = [time_str]
+    if "-" in time_str and ":" not in time_str:
+        time_candidates.append(time_str.replace("-", ":"))
+
+    for candidate in time_candidates:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                return datetime.strptime(f"{date_str} {candidate}", fmt)
+            except ValueError:
+                continue
+    return None
+
+
+def _get_local_news_db_dir(storage_manager) -> Optional[Path]:
+    """获取本地新闻 SQLite 目录。"""
+    backend = storage_manager.get_backend()
+    data_dir = getattr(backend, "data_dir", None) or getattr(storage_manager, "data_dir", None)
+    if not data_dir:
+        return None
+
+    news_dir = Path(data_dir) / "news"
+    if not news_dir.exists():
+        return None
+    return news_dir
+
+
+def _collect_recent_url_signatures(
+    storage_manager,
+    current_platform_ids: Optional[List[str]],
+    latest_date: str,
+    latest_time: str,
+    lookback_hours: int = 48,
+) -> Dict[str, Set[str]]:
+    """收集最近 lookback_hours 小时内出现过的新闻 URL 签名。"""
+    latest_dt = _parse_news_datetime(latest_date, latest_time)
+    news_dir = _get_local_news_db_dir(storage_manager)
+    if latest_dt is None or news_dir is None:
+        return {}
+
+    window_start = latest_dt - timedelta(hours=lookback_hours)
+    platform_filter = set(current_platform_ids) if current_platform_ids is not None else None
+    recent_signatures: Dict[str, Set[str]] = {}
+
+    for db_path in sorted(news_dir.glob('*.db')):
+        try:
+            db_date = datetime.strptime(db_path.stem, "%Y-%m-%d")
+        except ValueError:
+            continue
+
+        if db_date.date() < window_start.date() or db_date.date() > latest_dt.date():
+            continue
+
+        conn = sqlite3.connect(db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT platform_id, url, first_crawl_time
+                FROM news_items
+                WHERE url != ''
+            """)
+            for source_id, url, first_crawl_time in cursor.fetchall():
+                if platform_filter is not None and source_id not in platform_filter:
+                    continue
+
+                item_dt = _parse_news_datetime(db_path.stem, first_crawl_time)
+                if item_dt is None:
+                    continue
+                if not (window_start <= item_dt < latest_dt):
+                    continue
+
+                normalized_url = normalize_url(url, source_id)
+                if not normalized_url:
+                    continue
+
+                recent_signatures.setdefault(source_id, set()).add(normalized_url)
+        finally:
+            conn.close()
+
+    return recent_signatures
+
+
 def detect_latest_new_titles_from_storage(
     storage_manager,
     current_platform_ids: Optional[List[str]] = None,
@@ -187,6 +278,38 @@ def detect_latest_new_titles_from_storage(
 
             if source_new_titles:
                 new_titles[source_id] = source_new_titles
+
+        # 步骤4：对新闻源做跨天 URL 去重，避免隔夜重复推送
+        dedup_config = getattr(storage_manager, "dedup_config", {}) or {}
+        dedup_enabled = dedup_config.get("ENABLED", True)
+        hotlist_dedup_enabled = dedup_config.get("APPLY_TO", {}).get("HOTLIST", True)
+        lookback_hours = int(dedup_config.get("LOOKBACK_HOURS", 48) or 48)
+
+        recent_signatures = {}
+        if dedup_enabled and hotlist_dedup_enabled and lookback_hours > 0:
+            recent_signatures = _collect_recent_url_signatures(
+                storage_manager,
+                current_platform_ids,
+                latest_data.date,
+                latest_time,
+                lookback_hours=lookback_hours,
+            )
+        if recent_signatures:
+            filtered_new_titles = {}
+            for source_id, source_titles in new_titles.items():
+                known_signatures = recent_signatures.get(source_id, set())
+                filtered_titles = {}
+
+                for title, title_data in source_titles.items():
+                    normalized_url = normalize_url(title_data.get("url", ""), source_id)
+                    if normalized_url and normalized_url in known_signatures:
+                        continue
+                    filtered_titles[title] = title_data
+
+                if filtered_titles:
+                    filtered_new_titles[source_id] = filtered_titles
+
+            new_titles = filtered_new_titles
 
         return new_titles
 

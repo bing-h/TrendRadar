@@ -39,6 +39,7 @@ class StorageManager:
         pull_enabled: bool = False,
         pull_days: int = 0,
         timezone: str = DEFAULT_TIMEZONE,
+        dedup_config: Optional[dict] = None,
     ):
         """
         初始化存储管理器
@@ -65,6 +66,7 @@ class StorageManager:
         self.pull_enabled = pull_enabled
         self.pull_days = pull_days
         self.timezone = timezone
+        self.dedup_config = dedup_config or {}
 
         self._backend: Optional[StorageBackend] = None
         self._remote_backend: Optional[StorageBackend] = None
@@ -138,6 +140,7 @@ class StorageManager:
                 enable_txt=self.enable_txt,
                 enable_html=self.enable_html,
                 timezone=self.timezone,
+                dedup_config=self.dedup_config,
             )
         except ImportError as e:
             print(f"[存储管理器] 远程后端导入失败: {e}")
@@ -168,6 +171,7 @@ class StorageManager:
                     enable_txt=self.enable_txt,
                     enable_html=self.enable_html,
                     timezone=self.timezone,
+                    dedup_config=self.dedup_config,
                 )
                 print(f"[存储管理器] 使用本地存储后端 (数据目录: {self.data_dir})")
 
@@ -380,6 +384,7 @@ def get_storage_manager(
     pull_enabled: bool = False,
     pull_days: int = 0,
     timezone: str = DEFAULT_TIMEZONE,
+    dedup_config: Optional[dict] = None,
     force_new: bool = False,
 ) -> StorageManager:
     """
@@ -415,6 +420,7 @@ def get_storage_manager(
             pull_enabled=pull_enabled,
             pull_days=pull_days,
             timezone=timezone,
+            dedup_config=dedup_config,
         )
 
     return _storage_manager
