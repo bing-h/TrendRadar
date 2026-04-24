@@ -1,6 +1,8 @@
 services:
   trendradar:
-    image: wantcat/trendradar:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: trendradar
     restart: unless-stopped
 
@@ -56,7 +58,9 @@ services:
       - IMMEDIATE_RUN=${IMMEDIATE_RUN:-true}
 
   trendradar-mcp:
-    image: wantcat/trendradar-mcp:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mcp
     container_name: trendradar-mcp
     restart: unless-stopped
 
