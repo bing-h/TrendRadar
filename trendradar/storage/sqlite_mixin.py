@@ -1086,42 +1086,42 @@ class SQLiteStorageMixin:
             新增的 RSS 条目 {feed_id: [RSSItem, ...]}
         """
         try:
+            # 获取当前批次时间
+            current_time = current_data.crawl_time
+
             # 获取历史数据
             historical_data = self._get_rss_data_impl(current_data.date)
 
             if not historical_data:
                 # 没有历史数据，所有都是新的
-                return current_data.items.copy()
+                new_items = current_data.items.copy()
+            else:
+                # 收集历史 URL（first_time < current_time 的条目）
+                historical_urls: Dict[str, set] = {}
+                for feed_id, rss_list in historical_data.items.items():
+                    historical_urls[feed_id] = set()
+                    for item in rss_list:
+                        first_time = item.first_time or item.crawl_time
+                        if first_time < current_time:
+                            if item.url:
+                                historical_urls[feed_id].add(item.url)
 
-            # 获取当前批次时间
-            current_time = current_data.crawl_time
-
-            # 收集历史 URL（first_time < current_time 的条目）
-            historical_urls: Dict[str, set] = {}
-            for feed_id, rss_list in historical_data.items.items():
-                historical_urls[feed_id] = set()
-                for item in rss_list:
-                    first_time = item.first_time or item.crawl_time
-                    if first_time < current_time:
-                        if item.url:
-                            historical_urls[feed_id].add(item.url)
-
-            # 检查是否有历史数据
-            has_historical_data = any(len(urls) > 0 for urls in historical_urls.values())
-            if not has_historical_data:
-                # 第一次抓取，没有"新增"概念
-                return {}
-
-            # 检测新增
-            new_items: Dict[str, List[RSSItem]] = {}
-            for feed_id, rss_list in current_data.items.items():
-                hist_set = historical_urls.get(feed_id, set())
-                for item in rss_list:
-                    # 通过 URL 判断是否新增
-                    if item.url and item.url not in hist_set:
-                        if feed_id not in new_items:
-                            new_items[feed_id] = []
-                        new_items[feed_id].append(item)
+                # 检查是否有历史数据
+                has_historical_data = any(len(urls) > 0 for urls in historical_urls.values())
+                if not has_historical_data:
+                    # 第一次抓取，没有"新增"概念
+                    new_items = {}
+                else:
+                    # 检测新增
+                    new_items: Dict[str, List[RSSItem]] = {}
+                    for feed_id, rss_list in current_data.items.items():
+                        hist_set = historical_urls.get(feed_id, set())
+                        for item in rss_list:
+                            # 通过 URL 判断是否新增
+                            if item.url and item.url not in hist_set:
+                                if feed_id not in new_items:
+                                    new_items[feed_id] = []
+                                new_items[feed_id].append(item)
 
             # 对 RSS 做跨天 URL 去重，避免相同文章隔天重复推送
             dedup_config = getattr(self, "dedup_config", {}) or {}

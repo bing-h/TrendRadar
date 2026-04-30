@@ -263,21 +263,21 @@ def detect_latest_new_titles_from_storage(
         # 在这种情况下，将所有最新批次的标题视为"新增"（用于增量模式的第一次推送）
         has_historical_data = any(len(titles) > 0 for titles in historical_titles.values())
         if not has_historical_data:
-            # 第一次爬取：返回所有最新标题作为"新增"
-            return latest_titles
+            # 当天第一次爬取仍要继续执行跨天 URL 去重，避免隔夜重复推送。
+            new_titles = latest_titles
+        else:
+            # 步骤3：找出新增标题 = 最新批次标题 - 历史标题
+            new_titles = {}
+            for source_id, source_latest_titles in latest_titles.items():
+                historical_set = historical_titles.get(source_id, set())
+                source_new_titles = {}
 
-        # 步骤3：找出新增标题 = 最新批次标题 - 历史标题
-        new_titles = {}
-        for source_id, source_latest_titles in latest_titles.items():
-            historical_set = historical_titles.get(source_id, set())
-            source_new_titles = {}
+                for title, title_data in source_latest_titles.items():
+                    if title not in historical_set:
+                        source_new_titles[title] = title_data
 
-            for title, title_data in source_latest_titles.items():
-                if title not in historical_set:
-                    source_new_titles[title] = title_data
-
-            if source_new_titles:
-                new_titles[source_id] = source_new_titles
+                if source_new_titles:
+                    new_titles[source_id] = source_new_titles
 
         # 步骤4：对新闻源做跨天 URL 去重，避免隔夜重复推送
         dedup_config = getattr(storage_manager, "dedup_config", {}) or {}
