@@ -600,6 +600,8 @@ class SQLiteStorageMixin:
             新增的标题数据 {source_id: {title: NewsItem}}
         """
         try:
+            current_time = current_data.crawl_time
+
             # 获取历史数据
             historical_data = self._get_today_all_data_impl(current_data.date)
 
@@ -608,36 +610,105 @@ class SQLiteStorageMixin:
                 new_titles = {}
                 for source_id, news_list in current_data.items.items():
                     new_titles[source_id] = {item.title: item for item in news_list}
-                return new_titles
+            else:
+                # 收集历史标题（first_time < current_time 的标题）
+                # 这样可以正确处理同一标题因 URL 变化而产生多条记录的情况
+                historical_titles: Dict[str, set] = {}
+                for source_id, news_list in historical_data.items.items():
+                    historical_titles[source_id] = set()
+                    for item in news_list:
+                        first_time = item.first_time or item.crawl_time
+                        if first_time < current_time:
+                            historical_titles[source_id].add(item.title)
 
-            # 获取当前批次时间
-            current_time = current_data.crawl_time
+                # 检查是否有历史数据
+                has_historical_data = any(len(titles) > 0 for titles in historical_titles.values())
+                if not has_historical_data:
+                    # 第一次抓取，没有"新增"概念
+                    new_titles = {}
+                else:
+                    # 检测新增
+                    new_titles = {}
+                    for source_id, news_list in current_data.items.items():
+                        hist_set = historical_titles.get(source_id, set())
+                        for item in news_list:
+                            if item.title not in hist_set:
+                                if source_id not in new_titles:
+                                    new_titles[source_id] = {}
+                                new_titles[source_id][item.title] = item
 
-            # 收集历史标题（first_time < current_time 的标题）
-            # 这样可以正确处理同一标题因 URL 变化而产生多条记录的情况
-            historical_titles: Dict[str, set] = {}
-            for source_id, news_list in historical_data.items.items():
-                historical_titles[source_id] = set()
-                for item in news_list:
-                    first_time = item.first_time or item.crawl_time
-                    if first_time < current_time:
-                        historical_titles[source_id].add(item.title)
+            # 与主增量检测路径一致：返回前统一执行跨天 URL 去重。
+            dedup_config = getattr(self, "dedup_config", {}) or {}
+            dedup_enabled = dedup_config.get("ENABLED", True)
+            hotlist_dedup_enabled = dedup_config.get("APPLY_TO", {}).get("HOTLIST", True)
+            lookback_hours = int(dedup_config.get("LOOKBACK_HOURS", 48) or 48)
 
-            # 检查是否有历史数据
-            has_historical_data = any(len(titles) > 0 for titles in historical_titles.values())
-            if not has_historical_data:
-                # 第一次抓取，没有"新增"概念
-                return {}
+            if dedup_enabled and hotlist_dedup_enabled and lookback_hours > 0 and new_titles:
+                recent_signatures: Dict[str, set] = {}
+                news_dir = Path(self.data_dir) / "news"
 
-            # 检测新增
-            new_titles = {}
-            for source_id, news_list in current_data.items.items():
-                hist_set = historical_titles.get(source_id, set())
-                for item in news_list:
-                    if item.title not in hist_set:
-                        if source_id not in new_titles:
-                            new_titles[source_id] = {}
-                        new_titles[source_id][item.title] = item
+                latest_dt = None
+                for candidate in (current_time, current_time.replace("-", ":")):
+                    try:
+                        latest_dt = datetime.strptime(f"{current_data.date} {candidate}", "%Y-%m-%d %H:%M")
+                        break
+                    except ValueError:
+                        continue
+
+                if latest_dt and news_dir.exists():
+                    window_start = latest_dt - timedelta(hours=lookback_hours)
+                    platform_filter = set(current_data.items.keys())
+
+                    for db_path in sorted(news_dir.glob("*.db")):
+                        try:
+                            db_date = datetime.strptime(db_path.stem, "%Y-%m-%d")
+                        except ValueError:
+                            continue
+
+                        if db_date.date() < window_start.date() or db_date.date() > latest_dt.date():
+                            continue
+
+                        conn = sqlite3.connect(db_path)
+                        try:
+                            cursor = conn.cursor()
+                            cursor.execute("""
+                                SELECT platform_id, url, first_crawl_time
+                                FROM news_items
+                                WHERE url != ''
+                            """)
+                            for source_id, url, first_time in cursor.fetchall():
+                                if source_id not in platform_filter or not first_time:
+                                    continue
+
+                                item_dt = None
+                                for candidate in (first_time, first_time.replace("-", ":")):
+                                    try:
+                                        item_dt = datetime.strptime(f"{db_path.stem} {candidate}", "%Y-%m-%d %H:%M")
+                                        break
+                                    except ValueError:
+                                        continue
+                                if item_dt is None or not (window_start <= item_dt < latest_dt):
+                                    continue
+
+                                normalized_url = normalize_url(url, source_id)
+                                if normalized_url:
+                                    recent_signatures.setdefault(source_id, set()).add(normalized_url)
+                        finally:
+                            conn.close()
+
+                if recent_signatures:
+                    filtered_titles = {}
+                    for source_id, titles in new_titles.items():
+                        known = recent_signatures.get(source_id, set())
+                        kept = {}
+                        for title, item in titles.items():
+                            normalized_url = normalize_url(item.url or "", source_id)
+                            if normalized_url and normalized_url in known:
+                                continue
+                            kept[title] = item
+                        if kept:
+                            filtered_titles[source_id] = kept
+                    new_titles = filtered_titles
 
             return new_titles
 
