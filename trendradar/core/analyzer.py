@@ -156,14 +156,12 @@ def count_word_frequency(
 
     # 确定处理的数据源和新增标记逻辑
     if mode == "incremental":
-        if is_first_today:
-            # 增量模式 + 当天第一次：处理所有新闻，都标记为新增
-            results_to_process = results
-            all_news_are_new = True
+        if new_titles is not None:
+            # 使用已完成跨天去重的新增集合；当天第一次抓取也不能回退到全量结果。
+            results_to_process = new_titles
         else:
-            # 增量模式 + 当天非第一次：只处理新增的新闻
-            results_to_process = new_titles if new_titles else {}
-            all_news_are_new = True
+            results_to_process = results if is_first_today else {}
+        all_news_are_new = True
     elif mode == "current":
         # current 模式：只处理当前时间批次的新闻，但统计信息来自全部历史
         if title_info:
